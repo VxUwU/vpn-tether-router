@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>vtr // VPN Tether Router</title>
+<style>
+  :root{
+    --bg:#05080a;
+    --panel:#0b1114;
+    --panel2:#0e161b;
+    --stroke:#1b2a30;
+    --stroke2:#243841;
+    --grid:rgba(98,255,173,.045);
+    --txt:#cfe7dd;
+    --dim:#5c7a74;
+    --faint:#2f4a46;
+    --green:#62ffad;
+    --green2:#2fd488;
+    --cyan:#58d9ff;
+    --amber:#ffd166;
+    --red:#ff5d5d;
+    --mono:ui-monospace,"JetBrains Mono","Fira Code",Menlo,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;background:var(--bg)}
+  body{
+    color:var(--txt);
+    font-family:var(--mono);
+    font-size:12px;line-height:1.5;
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px) 0 0/22px 22px,
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0/22px 22px,
+      radial-gradient(900px 500px at 80% -10%, rgba(88,217,255,.08), transparent 60%),
+      radial-gradient(700px 400px at 10% 110%, rgba(98,255,173,.07), transparent 60%),
+      var(--bg);
+    padding:14px;min-height:100%;
+    overflow-x:hidden;
+  }
+  /* subtle scanline overlay */
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:50;
+    background:repeating-linear-gradient(to bottom, rgba(255,255,255,.012) 0 1px, transparent 1px 3px);
+    mix-blend-mode:overlay;
+  }
+
+  .wrap{max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+
+  /* ---------- generic panel ---------- */
+  .panel{
+    position:relative;
+    background:linear-gradient(180deg, var(--panel), var(--panel2));
+    border:1px solid var(--stroke);
+    border-radius:10px;
+    padding:12px 14px;
+    box-shadow:0 10px 28px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.03);
+  }
+  .panel::before,.panel::after{
+    content:"";position:absolute;width:10px;height:10px;
+    border:1px solid var(--green);opacity:.55;
+  }
+  .panel::before{top:-1px;left:-1px;border-right:none;border-bottom:none}
+  .panel::after{bottom:-1px;right:-1px;border-left:none;border-top:none}
+
+  .ph{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .ph .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
+  .ph .lbl{font-size:10.5px;letter-spacing:2.2px;color:var(--dim);text-transform:uppercase;flex:1}
+  .ph .tag{font-size:10px;color:var(--faint);letter-spacing:1.5px}
+
+  /* ---------- header ---------- */
+  .hdr{display:flex;align-items:center;gap:12px}
+  .brand{
+    width:46px;height:46px;flex:none;border-radius:9px;
+    display:grid;place-items:center;
+    background:linear-gradient(135deg, rgba(98,255,173,.12), rgba(88,217,255,.08));
+    border:1px solid rgba(98,255,173,.4);
+    box-shadow:0 0 18px rgba(98,255,173,.18), inset 0 0 10px rgba(98,255,173,.08);
+    font-size:11px;letter-spacing:1.5px;color:var(--green);font-weight:700;
+  }
+  .brand span{display:block;text-align:center;line-height:1}
+  .brand .lo{font-size:8px;color:var(--cyan);margin-top:2px;letter-spacing:1px}
+  .title{font-size:14px;font-weight:700;color:#eaf7f0;letter-spacing:.4px}
+  .sub{font-size:10px;color:var(--dim);letter-spacing:1.2px;margin-top:2px;text-transform:uppercase}
+  .pill{
+    margin-left:auto;font-size:10px;font-weight:800;letter-spacing:2px;
+    padding:6px 10px;border-radius:4px;border:1px solid currentColor;
+    text-transform:uppercase;white-space:nowrap;
+    display:flex;align-items:center;gap:7px;
+  }
+  .pill .led{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor;animation:pulse 1.8s infinite}
+  .pill.on{color:var(--green)}
+  .pill.off{color:var(--amber)}
+  .pill.err{color:var(--red)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  /* Pas WebUI hidden/background: hentikan animasi utk hemat GPU. */
+  body.paused .pill .led,
+  body.paused .flow .pkt{animation-play-state:paused}
+
+  /* ---------- status matrix ---------- */
+  .matrix{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--stroke);border:1px solid var(--stroke);border-radius:6px;overflow:hidden}
+  .cell{background:var(--panel2);padding:9px 11px;display:flex;flex-direction:column;gap:3px;min-height:50px}
+  .cell .k{font-size:9.5px;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase}
+  .cell .v{font-size:12.5px;color:var(--txt);word-break:break-all;line-height:1.3}
+  .cell .v.good{color:var(--green)}
+  .cell .v.warn{color:var(--amber)}
+  .cell .v.bad{color:var(--red)}
+  .cell .v.info{color:var(--cyan)}
+  .cell.wide{grid-column:1/-1}
+
+  /* ---------- topology ---------- */
+  .topo{
+    font-family:var(--mono);font-size:11px;line-height:1.75;
+    padding:12px 14px;background:#060a0c;border:1px solid var(--stroke);border-radius:6px;
+    color:var(--dim);white-space:pre;overflow-x:auto;letter-spacing:.3px;
+  }
+  .topo .n{color:var(--cyan)}
+  .topo .v{color:var(--green)}
+  .topo .u{color:var(--amber)}
+  .topo .f{color:var(--faint)}
+  .flow{position:relative;height:14px;margin:4px 0}
+  .flow .track{position:absolute;left:0;right:0;top:6px;height:2px;background:linear-gradient(90deg,var(--faint),var(--stroke2),var(--faint))}
+  .flow .pkt{position:absolute;top:2px;width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:fly 2.2s linear infinite}
+  .flow .pkt.b{background:var(--cyan);box-shadow:0 0 10px var(--cyan);animation-delay:1.1s;animation-duration:2.6s}
+  @keyframes fly{0%{left:-6px;opacity:0}10%{opacity:1}90%{opacity:1}100%{left:100%;opacity:0}}
+
+  /* ---------- toggle ---------- */
+  .ctl{display:flex;flex-direction:column;align-items:center;gap:10px;padding:4px 0 2px}
+  .tgl{
+    width:138px;height:66px;border-radius:999px;cursor:pointer;position:relative;
+    background:rgba(255,255,255,.03);border:1px solid var(--stroke2);
+    transition:all .5s ease;
+  }
+  .tgl.on{
+    background:linear-gradient(135deg, rgba(98,255,173,.25), rgba(88,217,255,.18));
+    border-color:rgba(98,255,173,.6);
+    box-shadow:0 0 24px rgba(98,255,173,.3), inset 0 0 14px rgba(98,255,173,.1);
+  }
+  .knob{
+    position:absolute;top:4px;left:4px;width:56px;height:56px;border-radius:50%;
+    background:linear-gradient(145deg,#1c2422,#0a0e10);
+    border:1px solid var(--stroke2);
+    display:grid;place-items:center;
+    font-size:11px;letter-spacing:1.5px;color:var(--dim);font-weight:700;
+    transition:transform .55s cubic-bezier(.34,1.4,.44,1), background .4s, color .4s;
+    box-shadow:0 6px 14px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  .tgl.on .knob{
+    transform:translateX(72px);
+    background:linear-gradient(145deg,var(--green),var(--green2));
+    color:#052b18;border-color:rgba(255,255,255,.4);
+  }
+  .tlabel{font-size:10px;color:var(--dim);letter-spacing:2.5px;text-transform:uppercase;transition:color .4s}
+  .tgl.on + .tlabel{color:var(--green)}
+
+  /* ---------- buttons ---------- */
+  .btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+  .btn{
+    padding:10px 10px;border-radius:6px;border:1px solid var(--stroke2);cursor:pointer;
+    background:rgba(255,255,255,.025);color:var(--txt);font-family:var(--mono);
+    font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
+    transition:all .25s;
+    display:flex;align-items:center;justify-content:center;gap:6px;
+  }
+  .btn:active{transform:scale(.97)}
+  .btn:hover{border-color:var(--green);color:var(--green)}
+  .btn.wide{grid-column:1/-1}
+  .btn.primary{color:var(--green);border-color:rgba(98,255,173,.5);background:rgba(98,255,173,.07)}
+  .btn.primary:hover{background:rgba(98,255,173,.14);box-shadow:0 0 14px rgba(98,255,173,.25)}
+
+  /* ---------- console ---------- */
+  .console{
+    background:#050709;border:1px solid var(--stroke);border-radius:6px;
+    padding:10px 12px;height:170px;overflow-y:auto;
+    font-family:var(--mono);font-size:10.5px;line-height:1.65;
+    color:#8caa9f;white-space:pre-wrap;word-break:break-all;
+    scrollbar-width:thin;scrollbar-color:rgba(98,255,173,.3) transparent;
+  }
+  .console::-webkit-scrollbar{width:4px}
+  .console::-webkit-scrollbar-thumb{background:rgba(98,255,173,.25);border-radius:2px}
+  .console .ok{color:var(--green)}
+  .console .warn{color:var(--amber)}
+  .console .err{color:var(--red)}
+  .console .info{color:var(--cyan)}
+  .console .ts{color:var(--faint)}
+
+  /* ---------- stats bar ---------- */
+  .bar{display:flex;justify-content:space-between;gap:10px;padding:8px 10px;background:#060a0c;border:1px solid var(--stroke);border-radius:6px;margin-top:8px}
+  .bar div{font-size:10px;color:var(--dim);letter-spacing:1px}
+  .bar b{color:var(--txt);font-weight:600;letter-spacing:.5px}
+  .bar b.g{color:var(--green)}
+  .bar b.a{color:var(--amber)}
+
+  .foot{text-align:center;font-size:9.5px;color:var(--faint);letter-spacing:1.5px;margin-top:4px;text-transform:uppercase}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div class="panel">
+    <div class="hdr">
+      <div class="brand"><span>VTR</span><span class="lo">v2.3.3</span></div>
+      <div>
+        <div class="title">VPN TETHER ROUTER</div>
+        <div class="sub">Policy-based Routing &middot; tun&rarr;MASQ</div>
+      </div>
+      <div id="pill" class="pill off"><span class="led"></span><span id="pillTxt">OFFLINE</span></div>
+    </div>
+  </div>
+
+  <!-- STATUS MATRIX -->
+  <div class="panel">
+    <div class="ph"><div class="dot"></div><div class="lbl">// Interface Matrix</div><div class="tag" id="hbTag">HB --</div></div>
+    <div class="matrix">
+      <div class="cell">
+        <div class="k">VPN Tunnel</div>
+        <div class="v" id="mVpn">—</div>
+      </div>
+      <div class="cell">
+        <div class="k">Route Table</div>
+        <div class="v" id="mTable">—</div>
+      </div>
+      <div class="cell">
+        <div class="k">Uplink</div>
+        <div class="v" id="mUpl">—</div>
+      </div>
+      <div class="cell">
+        <div class="k">Tether If</div>
+        <div class="v" id="mTeth">—</div>
+      </div>
+      <div class="cell">
+        <div class="k">ip rule (prio 9000)</div>
+        <div class="v" id="mRule">—</div>
+      </div>
+      <div class="cell">
+        <div class="k">NAT Chain</div>
+        <div class="v" id="mNat">—</div>
+      </div>
+      <div class="cell wide">
+        <div class="k">Client (ARP)</div>
+        <div class="v" id="mClient">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOPOLOGY -->
+  <div class="panel">
+    <div class="ph"><div class="dot" style="background:var(--cyan);box-shadow:0 0 10px var(--cyan)"></div><div class="lbl">// Packet Flow</div><div class="tag">LIVE</div></div>
+    <div class="topo" id="topo"></div>
+  </div>
+
+  <!-- CONTROL -->
+  <div class="panel">
+    <div class="ph"><div class="dot" style="background:var(--amber);box-shadow:0 0 10px var(--amber)"></div><div class="lbl">// Control Deck</div><div class="tag" id="brTag">BRIDGE --</div></div>
+    <div class="ctl">
+      <div class="tgl" id="tgl" onclick="doToggle()"><div class="knob" id="knob">OFF</div></div>
+      <div class="tlabel" id="tlabel">TAP TO ENGAGE</div>
+    </div>
+    <div class="btns">
+      <button class="btn primary wide" onclick="doToggle()">&#9889; TOGGLE ROUTE</button>
+      <button class="btn" onclick="checkIP()">&#9741; VERIFY IP</button>
+      <button class="btn" onclick="refresh()">&#8634; REFRESH</button>
+    </div>
+    <div class="bar">
+      <div>fwd4 <b id="s4">?</b></div>
+      <div>fwd6 <b id="s6">?</b></div>
+      <div>rules <b id="sR">?</b></div>
+      <div>chains <b id="sC">?</b></div>
+    </div>
+  </div>
+
+  <!-- CONSOLE -->
+  <div class="panel">
+    <div class="ph"><div class="dot" style="background:var(--red);box-shadow:0 0 10px var(--red)"></div><div class="lbl">// System Log</div><div class="tag" id="tsTag">--:--:--</div></div>
+    <div class="console" id="log"></div>
+  </div>
+
+  <div class="foot">// stay-online &middot; no-netd-flush &middot; auto-off on reboot //</div>
+</div>
+
+<script>
+(function(){
+  var logEl = document.getElementById('log');
+  var cbCounter = 0;
+
+  // ----- bridge: KernelSU/SukiSU modern pakai async callback 3-arg.
+  //        ksu.exec(cmd, '{}', callbackName) -> window[callbackName](errno, stdout, stderr)
+  //        Lama 1-arg sync: ksu.exec(cmd) -> returns stdout langsung.
+  var KSU = window.ksu || window.suksu || window.KernelSU || window.$ksu || null;
+  var B_ASYNC = KSU && typeof KSU.exec === 'function';
+
+  function sh(cmd){
+    return new Promise(function(resolve){
+      if (!B_ASYNC){ resolve(''); return; }
+      var cbName = 'vtr_cb_' + Date.now() + '_' + (cbCounter++);
+      var done = false;
+      window[cbName] = function(errno, stdout, stderr){
+        if (done) return; done = true;
+        try{ delete window[cbName]; }catch(e){}
+        resolve((stdout == null ? '' : (''+stdout)).replace(/\s+$/,''));
+      };
+      try {
+        KSU.exec(cmd, '{}', cbName);
+      } catch (e) {
+        // Fallback sync 1-arg (KSU/SukiSU lama)
+        try {
+          var out = KSU.exec(cmd);
+          if (!done){ done = true; try{delete window[cbName];}catch(_){} resolve((out||'').replace(/\s+$/,'')); }
+          return;
+        } catch (e2) {
+          if (!done){ done = true; try{delete window[cbName];}catch(_){} log('exec err: '+e2,'err'); resolve(''); }
+          return;
+        }
+      }
+      // safety timeout
+      setTimeout(function(){ if(!done){ done = true; try{delete window[cbName];}catch(_){} resolve(''); } }, 8000);
+    });
+  }
+
+  var brTag = document.getElementById('brTag');
+  brTag.textContent = B_ASYNC ? 'BRIDGE OK' : 'BRIDGE NIL';
+  brTag.style.color = B_ASYNC ? 'var(--green)' : 'var(--amber)';
+
+  // ----- log helpers -----
+  function pad2(n){return n<10?'0'+n:n}
+  function stamp(){var d=new Date();return pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds())}
+  function log(msg, cls){
+    var line = document.createElement('div');
+    var ts = document.createElement('span'); ts.className='ts'; ts.textContent='['+stamp()+'] ';
+    line.appendChild(ts);
+    var body = document.createElement('span'); if(cls) body.className=cls; body.textContent=msg;
+    line.appendChild(body);
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+    while (logEl.childNodes.length > 120) logEl.removeChild(logEl.firstChild);
+    document.getElementById('tsTag').textContent = stamp();
+  }
+
+  // ----- queries (all async) -----
+  var _stateCache = null;
+  async function q(name){
+    if (!_stateCache){
+      var raw = await sh("sh /data/adb/modules/vpn_tether_router/action.sh --state 2>/dev/null");
+      _stateCache = {};
+      (raw||'').split('\n').forEach(function(l){
+        var m = l.match(/^([A-Z]+)=(.*)$/);
+        if (m) _stateCache[m[1]] = m[2];
+      });
+    }
+    return _stateCache[name] || '';
+  }
+  function invalidate(){ _stateCache = null; }
+
+  async function nFwd4(){ return parseInt((await sh("[ \"$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)\" = 1 ] && echo 1 || echo 0"))||'0',10); }
+  async function nFwd6(){ return parseInt((await sh("[ \"$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null)\" = 1 ] && echo 1 || echo 0"))||'0',10); }
+  async function nRules(){
+    var out = await sh("{ ip rule show 2>/dev/null; ip -6 rule show 2>/dev/null; } | awk '$1==\"9000:\"' | wc -l");
+    return parseInt(out||'0',10);
+  }
+  async function nChains(){
+    var a = parseInt((await sh("iptables -t filter -L vtr_fwd -n 2>/dev/null >/dev/null && echo 1 || echo 0"))||'0',10);
+    var b = parseInt((await sh("iptables -t nat -L vtr_nat -n 2>/dev/null >/dev/null && echo 1 || echo 0"))||'0',10);
+    return a + b;
+  }
+  async function vpnTable(vif){
+    if (!vif) return '';
+    return await sh("ip route show table "+vif+" 2>/dev/null | grep -q . && echo "+vif+" || echo");
+  }
+  async function clientIp(){
+    var t = await q('TETHER'); if (!t||t==='none') return '';
+    var first = t.split(/\s+/)[0];
+    return await sh("ip neigh show dev "+first+" 2>/dev/null | awk '$3==\"REACHABLE\"||$3==\"STALE\"||$3==\"DELAY\"||$3==\"PERMANENT\"{print $1; exit}'");
+  }
+
+  // ----- topology render -----
+  function esc(s){return (s||'').replace(/[<>&]/g,function(c){return{'<':'&lt;','>':'&gt;','&':'&amp;'}[c]})}
+  function renderTopo(on, vif, upl, teth, cli, tbl){
+    var t = document.getElementById('topo');
+    var V = vif  ? '<span class="v">'+esc(vif)+'</span>' : '<span class="f">(no vpn)</span>';
+    var U = upl  ? '<span class="u">'+esc(upl)+'</span>' : '<span class="f">(no uplink)</span>';
+    var T = teth ? '<span class="n">'+esc(teth.trim().split(/\s+/).join(',')) +'</span>' : '<span class="f">(no tether)</span>';
+    var C = cli  ? '<span class="n">'+esc(cli)+'</span>' : '<span class="f">(no client)</span>';
+    var TB= tbl  ? '<span class="v">table '+esc(tbl)+'</span>' : '';
+    var arrow = on ? '═══►' : '─ ─►';
+    var pkts = on ? '<div class="flow"><div class="track"></div><div class="pkt"></div><div class="pkt b"></div></div>' : '';
+    t.innerHTML =
+      '  '+C+'\n'+
+      '    │\n'+
+      '    ▼\n'+
+      '  ['+T+']  tether iface\n'+
+      '    │  '+arrow+'   '+(on?'<span class="v">rerouted</span>':'<span class="f">default route</span>')+'\n'+
+      '    ▼\n'+
+      '  ['+V+']  '+TB+'\n'+
+      '    │  '+arrow+'   MASQUERADE\n'+
+      '    ▼\n'+
+      '  ['+U+']  uplink → internet\n'+
+      (pkts? '\n'+pkts : '');
+  }
+
+  // ----- UI update -----
+  function setStatus(on){
+    var pill = document.getElementById('pill');
+    var tgl  = document.getElementById('tgl');
+    var knob = document.getElementById('knob');
+    var lab  = document.getElementById('tlabel');
+    pill.className = 'pill '+(on?'on':'off');
+    document.getElementById('pillTxt').textContent = on?'ONLINE':'OFFLINE';
+    tgl.classList.toggle('on', on);
+    knob.textContent = on?'ON':'OFF';
+    lab.textContent = on?'ROUTE ENGAGED':'TAP TO ENGAGE';
+  }
+
+  // Guard: cegah refresh paralel (bisa overlap kalau polling trigger + user tap REFRESH)
+  var _refreshing = false;
+  async function refresh(){
+    if (_refreshing) return;
+    _refreshing = true;
+    try { await _refreshImpl(); }
+    catch(e){ log('refresh error: '+(e&&e.message||e),'err'); }
+    finally { _refreshing = false; }
+  }
+  async function _refreshImpl(){
+    invalidate();
+    var on   = (await q('ON')) === '1';
+    var vraw = await q('VPN'); var vif  = vraw==='none' ? '' : vraw;
+    var uraw = await q('UPLINK'); var upl  = uraw==='unknown' ? '' : uraw;
+    var traw = await q('TETHER'); var teth = traw==='none' ? '' : traw;
+    var tbl  = await vpnTable(vif);
+    var cli  = await clientIp();
+
+    setStatus(on);
+
+    var mv = document.getElementById('mVpn');
+    mv.textContent = vif || 'none';
+    mv.className = 'v '+(vif?'good':'warn');
+
+    document.getElementById('mTable').textContent = tbl || '—';
+    document.getElementById('mTable').className = 'v '+(tbl?'info':'');
+
+    var mu = document.getElementById('mUpl');
+    mu.textContent = upl || '?';
+    mu.className = 'v '+(upl?'info':'warn');
+
+    var mt = document.getElementById('mTeth');
+    mt.textContent = teth || 'none';
+    mt.className = 'v '+(teth?'good':'warn');
+
+    var r = await nRules();
+    var mr = document.getElementById('mRule');
+    mr.textContent = r+' rule'+(r===1?'':'s');
+    mr.className = 'v '+(r>0?'good':'');
+
+    var c = await nChains();
+    var mn = document.getElementById('mNat');
+    mn.textContent = c>=2?'vtr_fwd + vtr_nat':(c===1?'partial ('+c+'/2)':'inactive');
+    mn.className = 'v '+(c>=2?'good':(c===1?'warn':''));
+
+    var mc = document.getElementById('mClient');
+    mc.textContent = cli || 'no reachable neighbor';
+    mc.className = 'v '+(cli?'info':'');
+
+    var f4 = await nFwd4(); var f6 = await nFwd6();
+    document.getElementById('s4').textContent = f4?'ON':'off';
+    document.getElementById('s4').className = f4?'g':'a';
+    document.getElementById('s6').textContent = f6?'ON':'off';
+    document.getElementById('s6').className = f6?'g':'a';
+    document.getElementById('sR').textContent = r;
+    document.getElementById('sR').className = r?'g':'a';
+    document.getElementById('sC').textContent = c+'/2';
+    document.getElementById('sC').className = c>=2?'g':'a';
+
+    document.getElementById('hbTag').textContent = 'HB '+stamp();
+
+    renderTopo(on, vif, upl, teth, cli, tbl);
+  }
+
+  var _toggling = false;
+  window.doToggle = async function(){
+    if (!B_ASYNC){ log('bridge missing — run action.sh manually','warn'); return; }
+    if (_toggling){ log('toggle in progress, ignored','warn'); return; }
+    _toggling = true;
+    try { await _doToggleImpl(); }
+    finally { _toggling = false; }
+  };
+  async function _doToggleImpl(){
+    log('exec action.sh ...','info');
+    var out = await sh("sh /data/adb/modules/vpn_tether_router/action.sh 2>&1");
+    (out||'').split('\n').forEach(function(l){
+      if(!l) return;
+      var cls='';
+      if (/GAGAL|FAIL|error/i.test(l)) cls='err';
+      else if (/PERINGATAN|WARN/i.test(l)) cls='warn';
+      else if (/selesai|OK|done/i.test(l)) cls='ok';
+      log(l, cls);
+    });
+    setTimeout(refresh, 400);
+  }
+
+  window.checkIP = async function(){
+    if (!B_ASYNC){ log('bridge missing — adb: action.sh --checkip','warn'); return; }
+    log('probing public IP via uplink vs vpn ...','info');
+    var out = await sh("sh /data/adb/modules/vpn_tether_router/action.sh --checkip 2>&1");
+    (out||'(empty)').split('\n').forEach(function(l){
+      if(!l) return;
+      var cls='';
+      if (/GAGAL|none/.test(l)) cls='warn';
+      else if (/^IP_VPN=/.test(l) && !/GAGAL/.test(l)) cls='ok';
+      else if (/^IP_UPLINK=/.test(l) && !/GAGAL/.test(l)) cls='info';
+      else if (/CLIENT_VIA_VPN=[1-9]/.test(l)) cls='ok';
+      else if (/CLIENT_VIA_UPLINK=[1-9]/.test(l)) cls='warn';
+      log(l, cls);
+    });
+  };
+
+  window.refresh = refresh;
+
+  // ----- smart polling: cuma jalan pas WebUI visible -----
+  // Pas user tutup WebUI / switch app, document.hidden = true → kita stop polling,
+  // pause animasi CSS. Pas user balik → langsung refresh + resume.
+  var pollTimer = null;
+  var POLL_MS = 5000;
+
+  function startPoll(){
+    if (pollTimer) return;
+    pollTimer = setInterval(refresh, POLL_MS);
+    document.body.classList.remove('paused');
+  }
+  function stopPoll(){
+    if (!pollTimer) return;
+    clearInterval(pollTimer); pollTimer = null;
+    document.body.classList.add('paused');
+  }
+
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden){
+      stopPoll();
+      log('webui hidden → polling paused (kernel route tetap jalan)','');
+    } else {
+      log('webui visible → polling resumed','info');
+      refresh();
+      startPoll();
+    }
+  });
+
+  // Pas tab ditutup, cleanup biar ga leak timer.
+  window.addEventListener('pagehide', stopPoll);
+
+  log('vtr webui ready','info');
+  log('bridge: '+(B_ASYNC?'connected (async)':'unavailable — read-only'), B_ASYNC?'ok':'warn');
+  log('tip: tutup WebUI aman, modul (kernel) tetap aktif.','');
+  refresh();
+  if (!document.hidden) startPoll();
+})();
+</script>
+</body>
+</html>

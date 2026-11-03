@@ -1,0 +1,7 @@
+id=vpn_tether_router
+name=VPN Tether Router
+version=v2.3.3
+versionCode=233
+author=VxU
+description=Toggle via WebUI: arahkan traffic tether (USB RNDIS dan Hotspot WiFi) lewat interface VPN (tunX). Aman: tanpa flush chain bawaan netd, auto-OFF saat reboot, HP tetap internet normal, plus tombol Cek IP Publik untuk verifikasi.
+webroot=webroot
